@@ -5,6 +5,6 @@ export function GetZipPath():Promise<string>;
 
 export function SaveZip():Promise<string>;
 
-export function StartBatch(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<void>;
+export function StartBatch(arg1:string,arg2:string,arg3:number,arg4:number):Promise<void>;
 
 export function SubmitCaptcha(arg1:string):Promise<void>;

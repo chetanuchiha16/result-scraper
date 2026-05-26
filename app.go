@@ -58,7 +58,7 @@ func (a *App) shutdown(_ context.Context) {
 
 // ─── StartBatch ───────────────────────────────────────────────────────────────
 // Called by the React frontend to kick off a batch scraping run.
-func (a *App) StartBatch(examSession, examYear, usnPrefix string, start, end int) error {
+func (a *App) StartBatch(vtuFolder, usnPrefix string, start, end int) error {
 	a.mu.Lock()
 	if a.batchRunning {
 		a.mu.Unlock()
@@ -78,7 +78,7 @@ func (a *App) StartBatch(examSession, examYear, usnPrefix string, start, end int
 	a.downloadDir = dir
 	a.zipPath = ""
 
-	go a.runBatch(examSession, examYear, usnPrefix, start, end)
+	go a.runBatch(vtuFolder, usnPrefix, start, end)
 	return nil
 }
 
@@ -119,7 +119,7 @@ func (a *App) SaveZip() (string, error) {
 }
 
 // ─── runBatch ─────────────────────────────────────────────────────────────────
-func (a *App) runBatch(examSession, examYear, usnPrefix string, start, end int) {
+func (a *App) runBatch(vtuFolder, usnPrefix string, start, end int) {
 	defer func() {
 		a.mu.Lock()
 		a.batchRunning = false
@@ -128,7 +128,7 @@ func (a *App) runBatch(examSession, examYear, usnPrefix string, start, end int) 
 
 	sess := scraper.NewSession()
 	a.session = sess
-	baseURL := fmt.Sprintf("https://results.vtu.ac.in/%scbcs%s/index.php", examSession, examYear)
+	baseURL := fmt.Sprintf("https://results.vtu.ac.in/%s/index.php", vtuFolder)
 
 	for i := start; i <= end; i++ {
 		usn := fmt.Sprintf("%s%03d", usnPrefix, i)
@@ -188,7 +188,7 @@ func (a *App) runBatch(examSession, examYear, usnPrefix string, start, end int) 
 
 	// 5. Build ZIP
 	a.emitLog("info", "Packaging PDFs into zip archive…")
-	zipOut := filepath.Join(os.TempDir(), fmt.Sprintf("vtu-%s%s-results.zip", examSession, examYear))
+	zipOut := filepath.Join(os.TempDir(), fmt.Sprintf("vtu-%s-results.zip", vtuFolder))
 	if err := zipper.Archive(a.downloadDir, zipOut); err != nil {
 		a.emitLog("error", fmt.Sprintf("ZIP creation failed: %v", err))
 		return

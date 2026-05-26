@@ -10,8 +10,8 @@ export function SaveZip() {
   return window['go']['main']['App']['SaveZip']();
 }
 
-export function StartBatch(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['StartBatch'](arg1, arg2, arg3, arg4, arg5);
+export function StartBatch(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['StartBatch'](arg1, arg2, arg3, arg4);
 }
 
 export function SubmitCaptcha(arg1) {

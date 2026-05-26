@@ -17,6 +17,7 @@ import (
 type Session struct {
 	client  *http.Client
 	formURL string // the POST target resolved from the results index page
+	token   string // CSRF / session token parsed from index page
 }
 
 var commonHeaders = map[string]string{
@@ -46,8 +47,8 @@ func NewSession() *Session {
 func (s *Session) Close() {}
 
 // FetchCaptcha loads the VTU results index page for the given USN,
-// extracts the CAPTCHA image src, downloads the image, and returns
-// a base64-encoded PNG string ready for the frontend <img> tag.
+// extracts the CAPTCHA image src and the CSRF Token, downloads the image,
+// and returns a base64-encoded PNG string ready for the frontend.
 func (s *Session) FetchCaptcha(baseURL, usn string) (string, error) {
 	// GET the index page to seed cookies
 	req, _ := http.NewRequest("GET", baseURL, nil)
@@ -64,21 +65,21 @@ func (s *Session) FetchCaptcha(baseURL, usn string) (string, error) {
 	}
 	pageHTML := string(body)
 
-	// Parse the CAPTCHA image src from the HTML
-	captchaSrc, err := extractCaptchaSrc(pageHTML, baseURL)
+	// Extract form fields (Captcha source, form action URL, CSRF Token)
+	captchaSrc, formURL, token, err := s.extractFormFields(pageHTML, baseURL)
 	if err != nil {
-		return "", fmt.Errorf("parse captcha src: %w", err)
+		return "", fmt.Errorf("extract form fields: %w", err)
 	}
 
-	// Remember form action URL
-	s.formURL = extractFormAction(pageHTML, baseURL)
+	s.formURL = formURL
+	s.token = token
 
 	// Download CAPTCHA image
 	imgReq, _ := http.NewRequest("GET", captchaSrc, nil)
 	applyHeaders(imgReq)
 	imgResp, err := s.client.Do(imgReq)
 	if err != nil {
-		return "", fmt.Errorf("download captcha: %w", err)
+		return "", fmt.Errorf("download captcha from %s: %w", captchaSrc, err)
 	}
 	defer imgResp.Body.Close()
 	imgBytes, err := io.ReadAll(imgResp.Body)
@@ -89,7 +90,7 @@ func (s *Session) FetchCaptcha(baseURL, usn string) (string, error) {
 	return base64.StdEncoding.EncodeToString(imgBytes), nil
 }
 
-// SubmitCaptcha POSTs the USN + captcha text to the results form and
+// SubmitCaptcha POSTs the USN + captcha text + token to the results form and
 // returns the raw HTML of the result page.
 func (s *Session) SubmitCaptcha(usn, captchaText string) (string, error) {
 	target := s.formURL
@@ -100,6 +101,9 @@ func (s *Session) SubmitCaptcha(usn, captchaText string) (string, error) {
 	formData := url.Values{}
 	formData.Set("lns", usn)
 	formData.Set("captchacode", captchaText)
+	if s.token != "" {
+		formData.Set("Token", s.token)
+	}
 
 	req, err := http.NewRequest("POST", target, strings.NewReader(formData.Encode()))
 	if err != nil {
@@ -136,50 +140,40 @@ func applyHeaders(req *http.Request) {
 	}
 }
 
-// extractCaptchaSrc parses the HTML to find <img> tags whose src contains "captcha".
-func extractCaptchaSrc(pageHTML, base string) (string, error) {
+// extractFormFields parses the page HTML once to retrieve the CAPTCHA image URL,
+// the form POST action, and the dynamic CSRF token.
+func (s *Session) extractFormFields(pageHTML, base string) (captchaSrc string, formAction string, token string, err error) {
 	doc, err := html.Parse(strings.NewReader(pageHTML))
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
-	var src string
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode && n.Data == "img" {
-			for _, a := range n.Attr {
-				if a.Key == "src" && strings.Contains(strings.ToLower(a.Val), "captcha") {
-					src = a.Val
-					return
-				}
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(doc)
-	if src == "" {
-		return "", fmt.Errorf("captcha img not found in page")
-	}
-	// Resolve relative URLs
-	if !strings.HasPrefix(src, "http") {
-		base := strings.TrimRight(base[:strings.LastIndex(base, "/")+1], "/")
-		src = base + "/" + strings.TrimLeft(src, "/")
-	}
-	return src, nil
-}
 
-// extractFormAction finds the <form action="..."> value.
-func extractFormAction(pageHTML, base string) string {
-	doc, _ := html.Parse(strings.NewReader(pageHTML))
-	var action string
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode && n.Data == "form" {
-			for _, a := range n.Attr {
-				if a.Key == "action" {
-					action = a.Val
-					return
+		if n.Type == html.ElementNode {
+			if n.Data == "img" {
+				for _, a := range n.Attr {
+					if a.Key == "src" && strings.Contains(strings.ToLower(a.Val), "captcha") {
+						captchaSrc = a.Val
+					}
+				}
+			} else if n.Data == "form" {
+				for _, a := range n.Attr {
+					if a.Key == "action" {
+						formAction = a.Val
+					}
+				}
+			} else if n.Data == "input" {
+				var name, val string
+				for _, a := range n.Attr {
+					if a.Key == "name" {
+						name = a.Val
+					} else if a.Key == "value" {
+						val = a.Val
+					}
+				}
+				if strings.ToLower(name) == "token" {
+					token = val
 				}
 			}
 		}
@@ -188,12 +182,30 @@ func extractFormAction(pageHTML, base string) string {
 		}
 	}
 	walk(doc)
-	if action == "" {
-		return base
+
+	if captchaSrc == "" {
+		return "", "", "", fmt.Errorf("captcha img not found in page HTML")
 	}
-	if !strings.HasPrefix(action, "http") {
-		dir := base[:strings.LastIndex(base, "/")+1]
-		action = dir + strings.TrimLeft(action, "/")
+
+	// Resolve domain-relative / host-relative paths properly
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to parse base URL: %w", err)
 	}
-	return action
+
+	if strings.HasPrefix(captchaSrc, "/") {
+		captchaSrc = fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, captchaSrc)
+	} else if !strings.HasPrefix(captchaSrc, "http") {
+		baseDir := base[:strings.LastIndex(base, "/")+1]
+		captchaSrc = baseDir + strings.TrimLeft(captchaSrc, "/")
+	}
+
+	if formAction == "" {
+		formAction = base
+	} else if !strings.HasPrefix(formAction, "http") {
+		baseDir := base[:strings.LastIndex(base, "/")+1]
+		formAction = baseDir + strings.TrimLeft(formAction, "/")
+	}
+
+	return captchaSrc, formAction, token, nil
 }

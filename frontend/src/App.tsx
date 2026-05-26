@@ -44,8 +44,7 @@ const now = () => new Date().toLocaleTimeString('en-IN', { hour12: false })
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   // Config state
-  const [examSession, setExamSession] = useState('Jan')
-  const [examYear, setExamYear] = useState('2024')
+  const [vtuFolder, setVtuFolder] = useState('DJcbcs24')
   const [usnPrefix, setUsnPrefix] = useState('1JS22CS0')
   const [startNum, setStartNum] = useState('1')
   const [endNum, setEndNum] = useState('60')
@@ -99,14 +98,14 @@ export default function App() {
     setProgress({ done: 0, total: 0, failed: 0, current: '' })
     const s = parseInt(startNum, 10)
     const e = parseInt(endNum, 10)
-    if (!usnPrefix || isNaN(s) || isNaN(e) || s > e) {
+    if (!vtuFolder || !usnPrefix || isNaN(s) || isNaN(e) || s > e) {
       setError('Please fill in all fields correctly.')
       return
     }
     setPhase('running')
     pushLog('info', `Starting batch: ${usnPrefix}${String(s).padStart(3,'0')} → ${usnPrefix}${String(e).padStart(3,'0')}`)
     try {
-      await StartBatch(examSession, examYear, usnPrefix, s, e)
+      await StartBatch(vtuFolder, usnPrefix, s, e)
     } catch (err: unknown) {
       setError(String(err))
       setPhase('idle')
@@ -169,15 +168,35 @@ export default function App() {
               <div className="section-label">Exam Details</div>
               <div className="field-group">
                 <div className="field">
-                  <label>Exam Session</label>
-                  <select value={examSession} onChange={e => setExamSession(e.target.value)} disabled={isRunning}>
-                    {SESSIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                  </select>
+                  <label>VTU Portal Folder</label>
+                  <input
+                    type="text"
+                    value={vtuFolder}
+                    onChange={e => setVtuFolder(e.target.value)}
+                    placeholder="e.g. DJcbcs24"
+                    disabled={isRunning}
+                    style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                  />
                 </div>
-                <div className="field">
-                  <label>Exam Year</label>
-                  <input type="number" value={examYear} onChange={e => setExamYear(e.target.value)}
-                    placeholder="e.g. 2024" disabled={isRunning} />
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ padding: '4px 8px', fontSize: 10, width: 'auto' }}
+                    onClick={() => setVtuFolder('DJcbcs24')}
+                    disabled={isRunning}
+                  >
+                    Odd Sem (DJcbcs24)
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ padding: '4px 8px', fontSize: 10, width: 'auto' }}
+                    onClick={() => setVtuFolder('JJEcbcs24')}
+                    disabled={isRunning}
+                  >
+                    Even Sem (JJEcbcs24)
+                  </button>
                 </div>
               </div>
             </div>
