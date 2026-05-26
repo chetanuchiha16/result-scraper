@@ -68,7 +68,12 @@ jobs:
           cd frontend
           npm ci
 
-      - name: Build Standalone Binary via Wails
+      - name: Build Standalone Binary via Wails (Linux)
+        if: matrix.platform.os == 'ubuntu-latest'
+        run: wails build -platform ${{ matrix.platform.platform }} -tags webkit2_41 -clean
+
+      - name: Build Standalone Binary via Wails (Windows)
+        if: matrix.platform.os == 'windows-latest'
         run: wails build -platform ${{ matrix.platform.platform }} -clean
 
       # ── Rename & Archive assets ──────────────────────────────────
