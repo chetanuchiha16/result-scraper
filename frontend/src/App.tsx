@@ -1,28 +1,368 @@
-import {useState} from 'react';
-import logo from './assets/images/logo-universal.png';
-import './App.css';
-import {Greet} from "../wailsjs/go/main/App";
+import React, { useState, useEffect, useRef, useCallback } from 'react'
+import './style.css'
+import { StartBatch, SubmitCaptcha, SaveZip } from '../wailsjs/go/main/App'
+import { EventsOn } from '../wailsjs/runtime/runtime'
 
-function App() {
-    const [resultText, setResultText] = useState("Please enter your name below 👇");
-    const [name, setName] = useState('');
-    const updateName = (e: any) => setName(e.target.value);
-    const updateResultText = (result: string) => setResultText(result);
-
-    function greet() {
-        Greet(name).then(updateResultText);
-    }
-
-    return (
-        <div id="App">
-            <img src={logo} id="logo" alt="logo"/>
-            <div id="result" className="result">{resultText}</div>
-            <div id="input" className="input-box">
-                <input id="name" className="input" onChange={updateName} autoComplete="off" name="input" type="text"/>
-                <button className="btn" onClick={greet}>Greet</button>
-            </div>
-        </div>
-    )
+// ─── Types ────────────────────────────────────────────────────────────────────
+interface LogEntry {
+  id: number
+  level: 'info' | 'success' | 'error' | 'warn'
+  msg: string
+  time: string
 }
 
-export default App
+interface ProgressPayload {
+  done: number
+  total: number
+  failed: number
+  current: string
+}
+
+interface CaptchaPayload {
+  usn: string
+  imgB64: string
+}
+
+interface DonePayload {
+  zipPath: string
+  done: number
+  failed: number
+}
+
+type Phase = 'idle' | 'running' | 'captcha' | 'done'
+
+// ─── Exam sessions pulled from scraper.py pattern ─────────────────────────────
+const SESSIONS = [
+  { value: 'Jan', label: 'January / February' },
+  { value: 'Jun', label: 'June / July' },
+  { value: 'Dec', label: 'December' },
+]
+
+let logId = 0
+const now = () => new Date().toLocaleTimeString('en-IN', { hour12: false })
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+export default function App() {
+  // Config state
+  const [examSession, setExamSession] = useState('Jan')
+  const [examYear, setExamYear] = useState('2024')
+  const [usnPrefix, setUsnPrefix] = useState('1JS22CS0')
+  const [startNum, setStartNum] = useState('1')
+  const [endNum, setEndNum] = useState('60')
+
+  // Runtime state
+  const [phase, setPhase] = useState<Phase>('idle')
+  const [progress, setProgress] = useState<ProgressPayload>({ done: 0, total: 0, failed: 0, current: '' })
+  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [captcha, setCaptcha] = useState<CaptchaPayload | null>(null)
+  const [captchaInput, setCaptchaInput] = useState('')
+  const [captchaSubmitting, setCaptchaSubmitting] = useState(false)
+  const [done, setDone] = useState<DonePayload | null>(null)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const logEndRef = useRef<HTMLDivElement>(null)
+
+  // Auto-scroll log to bottom
+  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [logs])
+
+  const pushLog = useCallback((level: LogEntry['level'], msg: string) => {
+    setLogs(prev => [...prev.slice(-200), { id: logId++, level, msg, time: now() }])
+  }, [])
+
+  // ─── Wails event listeners ─────────────────────────────────────────────────
+  useEffect(() => {
+    const offs = [
+      EventsOn('scraper:progress', (p: ProgressPayload) => setProgress(p)),
+      EventsOn('scraper:log', (e: { level: LogEntry['level']; msg: string }) => {
+        pushLog(e.level, e.msg)
+      }),
+      EventsOn('scraper:captcha', (c: CaptchaPayload) => {
+        setCaptcha(c)
+        setCaptchaInput('')
+        setPhase('captcha')
+      }),
+      EventsOn('scraper:done', (d: DonePayload) => {
+        setDone(d)
+        setPhase('done')
+        pushLog('success', `Batch complete — ${d.done} fetched, ${d.failed} failed`)
+      }),
+    ]
+    return () => offs.forEach(off => off())
+  }, [pushLog])
+
+  // ─── Handlers ─────────────────────────────────────────────────────────────
+  const handleStart = async () => {
+    setError('')
+    setLogs([])
+    setDone(null)
+    setProgress({ done: 0, total: 0, failed: 0, current: '' })
+    const s = parseInt(startNum, 10)
+    const e = parseInt(endNum, 10)
+    if (!usnPrefix || isNaN(s) || isNaN(e) || s > e) {
+      setError('Please fill in all fields correctly.')
+      return
+    }
+    setPhase('running')
+    pushLog('info', `Starting batch: ${usnPrefix}${String(s).padStart(3,'0')} → ${usnPrefix}${String(e).padStart(3,'0')}`)
+    try {
+      await StartBatch(examSession, examYear, usnPrefix, s, e)
+    } catch (err: unknown) {
+      setError(String(err))
+      setPhase('idle')
+    }
+  }
+
+  const handleCaptchaSubmit = async () => {
+    if (!captchaInput.trim()) return
+    setCaptchaSubmitting(true)
+    try {
+      await SubmitCaptcha(captchaInput.trim())
+    } finally {
+      setCaptchaSubmitting(false)
+      setCaptcha(null)
+      setPhase('running')
+    }
+  }
+
+  const handleSaveZip = async () => {
+    setSaving(true)
+    try {
+      const dest = await SaveZip()
+      if (dest) pushLog('success', `ZIP saved to: ${dest}`)
+    } catch (err) {
+      pushLog('error', `Save failed: ${err}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ─── Derived ───────────────────────────────────────────────────────────────
+  const pct = progress.total > 0 ? Math.round(((progress.done + progress.failed) / progress.total) * 100) : 0
+  const isComplete = phase === 'done'
+  const isRunning = phase === 'running' || phase === 'captcha'
+
+  // ─── Render ────────────────────────────────────────────────────────────────
+  return (
+    <div className="app-layout">
+
+      {/* Header */}
+      <header className="header">
+        <div className="header-logo">🎓</div>
+        <div>
+          <div className="header-title">VTU Result Scraper</div>
+          <div className="header-subtitle">acatrack · PDF Batch Generator</div>
+        </div>
+        <div className="header-badge">
+          {phase === 'idle' ? 'READY' : phase === 'done' ? 'DONE' : 'RUNNING'}
+        </div>
+      </header>
+
+      <div className="main-content">
+
+        {/* ── Left Config Panel ── */}
+        <aside className="config-panel">
+          <div className="config-panel-inner">
+
+            {/* Exam Details */}
+            <div>
+              <div className="section-label">Exam Details</div>
+              <div className="field-group">
+                <div className="field">
+                  <label>Exam Session</label>
+                  <select value={examSession} onChange={e => setExamSession(e.target.value)} disabled={isRunning}>
+                    {SESSIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Exam Year</label>
+                  <input type="number" value={examYear} onChange={e => setExamYear(e.target.value)}
+                    placeholder="e.g. 2024" disabled={isRunning} />
+                </div>
+              </div>
+            </div>
+
+            <div className="divider" />
+
+            {/* USN Range */}
+            <div>
+              <div className="section-label">USN Range</div>
+              <div className="field-group">
+                <div className="field">
+                  <label>USN Prefix</label>
+                  <input
+                    type="text" value={usnPrefix} onChange={e => setUsnPrefix(e.target.value)}
+                    placeholder="e.g. 1JS22CS0" disabled={isRunning}
+                    style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                  />
+                </div>
+                <div className="field-row">
+                  <div className="field">
+                    <label>Start №</label>
+                    <input type="number" value={startNum} onChange={e => setStartNum(e.target.value)} disabled={isRunning} min="1" />
+                  </div>
+                  <div className="field">
+                    <label>End №</label>
+                    <input type="number" value={endNum} onChange={e => setEndNum(e.target.value)} disabled={isRunning} min="1" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="divider" />
+
+            {/* Progress */}
+            {(isRunning || isComplete) && (
+              <div className="progress-section">
+                <div className="section-label">Progress</div>
+                <div className="progress-info">
+                  <span className="progress-label">
+                    {isComplete ? 'Complete' : `${progress.done + progress.failed} / ${progress.total}`}
+                  </span>
+                  <span className="progress-pct">{pct}%</span>
+                </div>
+                <div className="progress-track">
+                  <div className={`progress-fill ${isComplete ? 'complete' : ''}`} style={{ width: `${pct}%` }} />
+                </div>
+                {progress.current && (
+                  <div className="current-usn-box">
+                    <span className="current-usn-label">Now</span>
+                    <span>{progress.current}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Completion banner */}
+            {isComplete && done && (
+              <div className="complete-banner">
+                <div className="complete-banner-title">
+                  ✓ Batch Complete
+                </div>
+                <div className="zip-path">{done.zipPath}</div>
+                <button className="btn btn-success" onClick={handleSaveZip} disabled={saving}>
+                  {saving ? <><div className="spinner" /> Saving…</> : '💾 Save ZIP File'}
+                </button>
+              </div>
+            )}
+
+            {/* Error */}
+            {error && (
+              <div style={{ color: 'var(--danger)', fontSize: 12, background: 'var(--danger-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+                {error}
+              </div>
+            )}
+
+            {/* Start / Reset */}
+            <div style={{ marginTop: 'auto', paddingTop: 8 }}>
+              {!isRunning && !isComplete && (
+                <button id="btn-start" className="btn btn-primary" onClick={handleStart}>
+                  ▶ Start Scraping
+                </button>
+              )}
+              {isComplete && (
+                <button className="btn btn-ghost" onClick={() => { setPhase('idle'); setDone(null); setLogs([]) }}>
+                  ↩ New Batch
+                </button>
+              )}
+            </div>
+
+          </div>
+        </aside>
+
+        {/* ── Right Feed Panel ── */}
+        <section className="feed-panel">
+          <div className="feed-header">
+            <div className={`pulse-dot ${phase === 'idle' ? 'idle' : phase === 'done' ? '' : ''}`} />
+            <span className="feed-title">Activity Log</span>
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>
+              {logs.length} entries
+            </span>
+          </div>
+
+          <div className="feed-log">
+            {logs.length === 0 && (
+              <div style={{ color: 'var(--text-muted)', padding: '24px 0', textAlign: 'center' }}>
+                Waiting to start…
+              </div>
+            )}
+            {logs.map(entry => (
+              <div key={entry.id} className={`log-entry ${entry.level}`}>
+                <span className="log-time">{entry.time}</span>
+                <span className="log-msg">{entry.msg}</span>
+              </div>
+            ))}
+            <div ref={logEndRef} />
+          </div>
+
+          {/* Stats bar */}
+          <div className="stats-bar">
+            <div className="stat-card">
+              <div className="stat-value success">{progress.done}</div>
+              <div className="stat-label">Fetched</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-value danger">{progress.failed}</div>
+              <div className="stat-label">Failed</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-value accent">{progress.total}</div>
+              <div className="stat-label">Total</div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {/* ── CAPTCHA Modal ── */}
+      {phase === 'captcha' && captcha && (
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="modal-header">
+              <div className="modal-icon">🔐</div>
+              <div>
+                <div className="modal-title">CAPTCHA Required</div>
+                <div className="modal-usn">{captcha.usn}</div>
+              </div>
+            </div>
+
+            <div className="captcha-img-wrapper">
+              {captcha.imgB64
+                ? <img className="captcha-img" src={`data:image/png;base64,${captcha.imgB64}`} alt="CAPTCHA" />
+                : <span className="captcha-placeholder">Loading image…</span>
+              }
+            </div>
+
+            <div className="field">
+              <label>Enter the text shown above</label>
+              <input
+                id="captcha-input"
+                type="text"
+                autoFocus
+                value={captchaInput}
+                onChange={e => setCaptchaInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleCaptchaSubmit()}
+                placeholder="Type CAPTCHA here…"
+                disabled={captchaSubmitting}
+                style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: 2 }}
+              />
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => { setCaptcha(null); setPhase('running'); SubmitCaptcha('__skip__') }}>
+                Skip USN
+              </button>
+              <button
+                id="btn-captcha-submit"
+                className="btn btn-primary"
+                onClick={handleCaptchaSubmit}
+                disabled={!captchaInput.trim() || captchaSubmitting}
+              >
+                {captchaSubmitting ? <><div className="spinner" /> Submitting…</> : 'Submit →'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
