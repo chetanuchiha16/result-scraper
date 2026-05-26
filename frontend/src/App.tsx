@@ -44,10 +44,12 @@ const now = () => new Date().toLocaleTimeString('en-IN', { hour12: false })
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   // Config state
+  const [usnPrefix, setUsnPrefix] = useState('1JS22CS')
+  const [sem, setSem] = useState(3)
   const [vtuFolder, setVtuFolder] = useState('DJcbcs24')
-  const [usnPrefix, setUsnPrefix] = useState('1JS22CS0')
   const [startNum, setStartNum] = useState('1')
   const [endNum, setEndNum] = useState('60')
+  const [isOverride, setIsOverride] = useState(false)
 
   // Runtime state
   const [phase, setPhase] = useState<Phase>('idle')
@@ -68,6 +70,30 @@ export default function App() {
   const pushLog = useCallback((level: LogEntry['level'], msg: string) => {
     setLogs(prev => [...prev.slice(-200), { id: logId++, level, msg, time: now() }])
   }, [])
+
+  // ─── Auto-compute VTU Folder based on acatrack logic ──────────────────────────
+  useEffect(() => {
+    if (isOverride) return
+
+    // Extract 2-digit batch year from USN, e.g. "1JS22CS" -> 22
+    const yearMatch = usnPrefix.match(/\d{2}/)
+    if (!yearMatch) return
+
+    const batchYear = 2000 + parseInt(yearMatch[0], 10)
+    let session = ''
+    let year = 0
+
+    if (sem % 2 === 1) { // odd sem
+      session = 'DJ'
+      year = batchYear + Math.floor(sem / 2) + 1
+    } else { // even sem
+      session = 'JJE'
+      year = batchYear + Math.floor(sem / 2)
+    }
+
+    const yearSuffix = String(year).slice(-2)
+    setVtuFolder(`${session}cbcs${yearSuffix}`)
+  }, [usnPrefix, sem, isOverride])
 
   // ─── Wails event listeners ─────────────────────────────────────────────────
   useEffect(() => {
@@ -168,35 +194,48 @@ export default function App() {
               <div className="section-label">Exam Details</div>
               <div className="field-group">
                 <div className="field">
-                  <label>VTU Portal Folder</label>
+                  <label>Semester</label>
+                  <select
+                    value={sem}
+                    onChange={e => setSem(parseInt(e.target.value, 10))}
+                    disabled={isRunning}
+                  >
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map(s => (
+                      <option key={s} value={s}>Semester {s}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <label style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>VTU Portal Folder</span>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        color: isOverride ? 'var(--accent)' : 'var(--text-muted)',
+                        cursor: 'pointer',
+                        textDecoration: 'underline'
+                      }}
+                      onClick={() => setIsOverride(!isOverride)}
+                    >
+                      {isOverride ? '🔒 Auto-Calculate' : '🔓 Edit Folder'}
+                    </span>
+                  </label>
                   <input
                     type="text"
                     value={vtuFolder}
-                    onChange={e => setVtuFolder(e.target.value)}
+                    onChange={e => {
+                      setVtuFolder(e.target.value)
+                      setIsOverride(true)
+                    }}
                     placeholder="e.g. DJcbcs24"
-                    disabled={isRunning}
-                    style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                    disabled={isRunning || !isOverride}
+                    style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      opacity: !isOverride && !isRunning ? 0.75 : 1,
+                      backgroundColor: !isOverride ? 'rgba(255,255,255,0.03)' : undefined
+                    }}
                   />
-                </div>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    style={{ padding: '4px 8px', fontSize: 10, width: 'auto' }}
-                    onClick={() => setVtuFolder('DJcbcs24')}
-                    disabled={isRunning}
-                  >
-                    Odd Sem (DJcbcs24)
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    style={{ padding: '4px 8px', fontSize: 10, width: 'auto' }}
-                    onClick={() => setVtuFolder('JJEcbcs24')}
-                    disabled={isRunning}
-                  >
-                    Even Sem (JJEcbcs24)
-                  </button>
                 </div>
               </div>
             </div>
