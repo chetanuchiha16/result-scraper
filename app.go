@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"result-scraper/internal/scraper"
@@ -169,6 +170,16 @@ func (a *App) runBatch(vtuFolder, usnPrefix string, start, end int) {
 		}
 
 		// 4. Render HTML to PDF via chromedp
+		// Inject <base href="..."> into the HTML head so relative resources resolve correctly to VTU domain
+		baseHref := fmt.Sprintf("https://results.vtu.ac.in/%s/", vtuFolder)
+		baseTag := fmt.Sprintf("<base href=\"%s\">", baseHref)
+		htmlLower := strings.ToLower(resultHTML)
+		if idx := strings.Index(htmlLower, "<head>"); idx != -1 {
+			resultHTML = resultHTML[:idx+6] + baseTag + resultHTML[idx+6:]
+		} else {
+			resultHTML = baseTag + resultHTML
+		}
+
 		pdfPath := filepath.Join(a.downloadDir, usn+".pdf")
 		if err := scraper.RenderHTMLToPDF(resultHTML, pdfPath); err != nil {
 			a.emitLog("error", fmt.Sprintf("[%s] PDF generation failed: %v", usn, err))
