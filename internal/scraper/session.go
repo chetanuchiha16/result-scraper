@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -24,12 +25,16 @@ var commonHeaders = map[string]string{
 	"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-// NewSession creates a Session with a persistent cookie jar.
+// NewSession creates a Session with a persistent cookie jar and disabled TLS validation.
 func NewSession() *Session {
 	jar, _ := cookiejar.New(nil)
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 	return &Session{
 		client: &http.Client{
-			Jar: jar,
+			Jar:       jar,
+			Transport: tr,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return nil // follow redirects transparently
 			},
