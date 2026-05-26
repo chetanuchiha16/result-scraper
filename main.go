@@ -28,6 +28,7 @@ func main() {
 		Bind: []interface{}{
 			app,
 		},
+		Frameless:        true,
 		Linux: &linux.Options{
 			WebviewGpuPolicy: linux.WebviewGpuPolicyNever,
 		},

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import './style.css'
 import { StartBatch, SubmitCaptcha, SaveZip } from '../wailsjs/go/main/App'
-import { EventsOn } from '../wailsjs/runtime/runtime'
+import { EventsOn, Quit, WindowMinimise, WindowToggleMaximise } from '../wailsjs/runtime/runtime'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface LogEntry {
@@ -63,6 +63,19 @@ export default function App() {
   const [saving, setSaving] = useState(false)
 
   const logEndRef = useRef<HTMLDivElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   // Auto-scroll log to bottom
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [logs])
@@ -173,6 +186,11 @@ export default function App() {
 
       {/* Header */}
       <header className="header">
+        <div className="window-controls">
+          <div className="control-dot close" onClick={() => Quit()} title="Close" />
+          <div className="control-dot minimize" onClick={() => WindowMinimise()} title="Minimize" />
+          <div className="control-dot maximize" onClick={() => WindowToggleMaximise()} title="Maximize" />
+        </div>
         <div className="header-logo">🎓</div>
         <div>
           <div className="header-title">VTU Result Scraper</div>
@@ -193,29 +211,40 @@ export default function App() {
             <div>
               <div className="section-label">Exam Details</div>
               <div className="field-group">
-                <div className="field">
+                <div className="field" ref={dropdownRef}>
                   <label>Semester</label>
-                  <select
-                    value={sem}
-                    onChange={e => setSem(parseInt(e.target.value, 10))}
-                    disabled={isRunning}
-                  >
-                    {[1, 2, 3, 4, 5, 6, 7, 8].map(s => (
-                      <option key={s} value={s}>Semester {s}</option>
-                    ))}
-                  </select>
+                  <div className="custom-select-container">
+                    <div
+                      className={`custom-select-trigger ${dropdownOpen ? 'open' : ''} ${isRunning ? 'disabled' : ''}`}
+                      onClick={() => !isRunning && setDropdownOpen(!dropdownOpen)}
+                    >
+                      <span>Semester {sem}</span>
+                      <span className="custom-select-arrow"></span>
+                    </div>
+                    {dropdownOpen && !isRunning && (
+                      <div className="custom-select-options">
+                        {[1, 2, 3, 4, 5, 6, 7, 8].map(s => (
+                          <div
+                            key={s}
+                            className={`custom-select-option ${s === sem ? 'selected' : ''}`}
+                            onClick={() => {
+                              setSem(s)
+                              setDropdownOpen(false)
+                            }}
+                          >
+                            Semester {s}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="field">
                   <label style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span>VTU Portal Folder</span>
                     <span
-                      style={{
-                        fontSize: 10,
-                        color: isOverride ? 'var(--accent)' : 'var(--text-muted)',
-                        cursor: 'pointer',
-                        textDecoration: 'underline'
-                      }}
+                      className={`override-toggle ${isOverride ? 'active' : 'inactive'}`}
                       onClick={() => setIsOverride(!isOverride)}
                     >
                       {isOverride ? '🔒 Auto-Calculate' : '🔓 Edit Folder'}
@@ -230,11 +259,7 @@ export default function App() {
                     }}
                     placeholder="e.g. DJcbcs24"
                     disabled={isRunning || !isOverride}
-                    style={{
-                      fontFamily: "'JetBrains Mono', monospace",
-                      opacity: !isOverride && !isRunning ? 0.75 : 1,
-                      backgroundColor: !isOverride ? 'rgba(255,255,255,0.03)' : undefined
-                    }}
+                    className={`mono ${!isOverride ? 'read-only-calc' : ''}`}
                   />
                 </div>
               </div>
@@ -250,8 +275,8 @@ export default function App() {
                   <label>USN Prefix</label>
                   <input
                     type="text" value={usnPrefix} onChange={e => setUsnPrefix(e.target.value)}
-                    placeholder="e.g. 1JS22CS0" disabled={isRunning}
-                    style={{ fontFamily: "'JetBrains Mono', monospace" }}
+                    placeholder="e.g. 1JS22CS" disabled={isRunning}
+                    className="mono"
                   />
                 </div>
                 <div className="field-row">
@@ -304,9 +329,9 @@ export default function App() {
               </div>
             )}
 
-            {/* Error */}
+             {/* Error */}
             {error && (
-              <div style={{ color: 'var(--danger)', fontSize: 12, background: 'var(--danger-bg)', padding: '8px 12px', borderRadius: 'var(--radius-sm)' }}>
+              <div className="error-banner">
                 {error}
               </div>
             )}
@@ -316,6 +341,11 @@ export default function App() {
               {!isRunning && !isComplete && (
                 <button id="btn-start" className="btn btn-primary" onClick={handleStart}>
                   ▶ Start Scraping
+                </button>
+              )}
+              {isRunning && (
+                <button className="btn btn-scraping" disabled>
+                  <div className="spinner" /> Scraping Batch…
                 </button>
               )}
               {isComplete && (
@@ -331,7 +361,7 @@ export default function App() {
         {/* ── Right Feed Panel ── */}
         <section className="feed-panel">
           <div className="feed-header">
-            <div className={`pulse-dot ${phase === 'idle' ? 'idle' : phase === 'done' ? '' : ''}`} />
+            <div className={`pulse-dot ${phase === 'idle' ? 'idle' : phase === 'done' ? 'complete' : ''}`} />
             <span className="feed-title">Activity Log</span>
             <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>
               {logs.length} entries
@@ -401,7 +431,7 @@ export default function App() {
                 onKeyDown={e => e.key === 'Enter' && handleCaptchaSubmit()}
                 placeholder="Type CAPTCHA here…"
                 disabled={captchaSubmitting}
-                style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: 2 }}
+                className="captcha-input-field"
               />
             </div>
 
